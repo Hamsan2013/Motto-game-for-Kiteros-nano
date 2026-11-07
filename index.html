@@ -94,6 +94,15 @@
   const cv = document.getElementById("cv");
   const ctx = cv.getContext("2d");
 
+  // Sound files should be placed in the repository's assets/ directory.
+  const bellSound = new Audio("./assets/bell.mp3");
+  const solvedSound = new Audio("./assets/solved.mp3");
+
+  function playSound(sound) {
+    sound.currentTime = 0;
+    sound.play().catch(e => console.log("Audio playback unavailable until a user interaction or sound file is loaded.", e));
+  }
+
   function resize() {
     cv.width = window.innerWidth;
     cv.height = window.innerHeight;
@@ -217,7 +226,12 @@
       btn.className = "ans-btn";
       btn.textContent = choice;
       btn.onclick = () => {
+        if (choice !== ans) {
+          document.getElementById("sum-desc").textContent = "Not quite! Try another answer.";
+          return;
+        }
         motto.activeBoardText = `SOLVED: ${a} + ${b} = ${ans}`;
+        playSound(solvedSound);
         sumBar.style.display = "none";
       };
       ansBtns.appendChild(btn);
@@ -231,6 +245,7 @@
       sumBar.style.display = "none";
     };
     ansBtns.appendChild(skip);
+    document.getElementById("sum-desc").textContent = "Sum counted! Answer or flee before more students arrive!";
     sumBar.style.display = "block";
   }
 
@@ -240,6 +255,7 @@
     motto.timeLeft--;
     document.getElementById("ui-time").textContent = motto.timeLeft;
     if (motto.timeLeft <= 0) {
+      playSound(bellSound);
       if (motto.sumsTaken === 0) {
         endSchoolDay(false, "FAILED! You took 0 sums! The Headmaster caught you doing zero work. You must accept at least 1 sum!");
       } else if (motto.sumsTaken <= 5) {
