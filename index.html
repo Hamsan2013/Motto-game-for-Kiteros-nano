@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>MOTTO 3D: Maths Teacher</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+  body { background: #050811; color: #f1f5f9; font-family: system-ui, sans-serif; overflow: hidden; height: 100vh; width: 100vw; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  /* HUD */
+  #hud {
+    position: fixed; top: 10px; left: 10px; right: 10px;
+    display: flex; justify-content: space-between; align-items: center;
+    background: rgba(15, 23, 42, 0.85); border: 1px solid #00e5ff;
+    padding: 8px 14px; border-radius: 10px; font-size: 13px; z-index: 10;
+  }
+  .stat b { color: #00e5ff; }
+  .danger-text { color: #ef4444 !important; }
+  /* Touch Controls */
+  #joy-zone {
+    position: fixed; bottom: 24px; left: 24px; width: 110px; height: 110px;
+    background: rgba(255,255,255,0.08); border: 2px solid rgba(0,229,255,0.4);
+    border-radius: 50%; touch-action: none; z-index: 10;
+  }
+  #joy-knob {
+    position: absolute; top: 35px; left: 35px; width: 40px; height: 40px;
+    background: #00e5ff; border-radius: 50%; pointer-events: none;
+  }
+  #cam-btns {
+    position: fixed; bottom: 35px; right: 20px; display: flex; gap: 10px; z-index: 10;
+  }
+  .cbtn {
+    background: rgba(15, 23, 42, 0.85); color: #00e5ff; border: 1px solid #00e5ff;
+    padding: 14px 16px; border-radius: 12px; font-weight: 700; font-size: 14px;
+  }
+  /* Math Sum Prompt Overlay (Triggered while viewing 3D Chalkboard) */
+  #sum-bar {
+    position: fixed; bottom: 150px; left: 50%; transform: translateX(-50%);
+    background: rgba(10, 18, 36, 0.95); border: 2px solid #eab308;
+    padding: 12px 16px; border-radius: 12px; text-align: center;
+    display: none; z-index: 20; width: 90%; max-width: 360px;
+  }
+  #sum-bar h4 { color: #eab308; margin-bottom: 6px; font-size: 14px; }
+  .ans-row { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
+  .ans-btn {
+    background: #0066ff; color: #fff; border: 1px solid #00e5ff;
+    padding: 8px 14px; border-radius: 8px; font-weight: bold; cursor: pointer;
+  }
+  .skip-btn {
+    background: #ef4444; color: #fff; border: none;
+    padding: 8px 12px; border-radius: 8px; font-weight: bold; cursor: pointer;
+  }
+  /* End of Day Modal */
+  #end-modal {
+    position: fixed; inset: 0; background: rgba(5,8,17,0.94);
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px; text-align: center; z-index: 50;
+  }
+  #end-modal h1 { font-size: 26px; margin-bottom: 10px; color: #00e5ff; }
+  #end-modal p { font-size: 15px; color: #cbd5e1; max-width: 340px; margin-bottom: 18px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="stat">TEACHER: <b>MOTTO</b></div>
+  <div class="stat">SUMS TAKEN: <b id="ui-sums">0</b> / 5 Max (Goal: 1)</div>
+  <div class="stat">BELL IN: <b id="ui-time">60</b>s</div>
+</div>
+
+<div id="joy-zone"><div id="joy-knob"></div></div>
+<div id="cam-btns">
+  <button class="cbtn" id="rot-l">&#9664; Look</button>
+  <button class="cbtn" id="rot-r">Look &#9654;</button>
+</div>
+
+<div id="sum-bar">
+  <h4 id="sum-student">Student AI caught you! Look at the 3D Chalkboard!</h4>
+  <p id="sum-desc" style="font-size:12px;color:#94a3b8">Sum counted! Answer or flee before more students arrive!</p>
+  <div class="ans-row" id="ans-buttons"></div>
+</div>
+
+<div id="end-modal">
+  <h1 id="end-title">SCHOOL BELL RANG!</h1>
+  <p id="end-msg"></p>
+  <button class="ans-btn" onclick="location.reload()">Play Next School Day</button>
+</div>
+
+<canvas id="cv"></canvas>
+
+<script>
+(function() {
+  const cv = document.getElementById("cv");
+  const ctx = cv.getContext("2d");
+
+  function resize() {
+    cv.width = window.innerWidth;
+    cv.height = window.innerHeight;
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // --- SCHOOL WORLD BOUNDARIES (Player cannot exit [-260, 260]) ---
+  const BOUND = 250;
+
+  // --- PLAYER (MOTTO - Third Person Maths Teacher) ---
+  const motto = {
+    x: 0, z: -40, angle: 0, speed: 0, strafe: 0,
+    sumsTaken: 0, timeLeft: 60, gameOver: false,
+    activeBoardText: "MOTTO MATHS CLASS",
+    activeProblem: null
+  };
+
+  // --- 3D SCHOOL ROOMS, BOARDS & DESKS ---
+  // Classrooms, HM Office, Staff Room
+  const walls = [
+    // Outer Locked School Perimeter Walls
+    { x1: -260, z1: -260, x2: 260, z2: -260, h: 45, col: "#1e293b", label: "NORTH SCHOOL BOUNDARY (LOCKED)" },
+    { x1: 260,  z1: -260, x2: 260, z2: 260,  h: 45, col: "#172033", label: "EAST SCHOOL WING" },
+    { x1: 260,  z1: 260,  x2: -260,z2: 260,  h: 45, col: "#1e293b", label: "MAIN GATE (LOCKED - NO EXIT)" },
+    { x1: -260, z1: 260,  x2: -260,z2: -260, h: 45, col: "#172033", label: "WEST SCHOOL WING" },
+
+    // Classroom 1 (North-West) + 3D Black Chalkboard
+    { x1: -220, z1: 180, x2: -60, z2: 180, h: 36, col: "#064e3b", isBoard: true },
+    // Classroom 2 (North-East) + 3D Black Chalkboard
+    { x1: 60,   z1: 180, x2: 220, z2: 180, h: 36, col: "#064e3b", isBoard: true },
+    // HM (Headmaster) Room Partition (South-West)
+    { x1: -220, z1: -150, x2: -80, z2: -150, h: 35, col: "#4c1d95", label: "HM ROOM (HEADMASTER OFFICE)" },
+    // Staff Room Partition (South-East)
+    { x1: 80,   z1: -150, x2: 220, z2: -150, h: 35, col: "#1e3a8a", label: "TEACHER STAFF ROOM" }
+  ];
+
+  // Classroom Desks (3D Boxes)
+  const desks = [
+    { x: -170, z: 110 }, { x: -110, z: 110 },
+    { x: -170, z: 60 },  { x: -110, z: 60 },
+    { x: 110,  z: 110 }, { x: 170,  z: 110 },
+    { x: 110,  z: 60 },  { x: 170,  z: 60 },
+    { x: -150, z: -190 }, // HM Desk
+    { x: 150,  z: -190 }  // Staff Table
+  ];
+
+  // --- NPCS: AI Students, Headmaster (HM), and Other Teachers ---
+  const npcs = [
+    { name: "Student Ravi (AI)", role: "student", x: -140, z: 90,  col: "#38bdf8", cooldown: 0 },
+    { name: "Student Priya (AI)",role: "student", x: 140,  z: 90,  col: "#38bdf8", cooldown: 0 },
+    { name: "Student Arun (AI)", role: "student", x: -80,  z: 20,  col: "#38bdf8", cooldown: 0 },
+    { name: "Student Meena (AI)",role: "student", x: 90,   z: 20,  col: "#38bdf8", cooldown: 0 },
+    { name: "Student Karthik(AI)",role:"student", x: 0,    z: 130, col: "#38bdf8", cooldown: 0 },
+    { name: "Headmaster (HM)",   role: "hm",      x: -150, z: -175,col: "#f43f5e", cooldown: 0 },
+    { name: "Science Staff",     role: "staff",   x: 135,  z: -175,col: "#a855f7", cooldown: 0 },
+    { name: "English Staff",     role: "staff",   x: 170,  z: -175,col: "#a855f7", cooldown: 0 }
+  ];
+
+  // --- CONTROLS (Keyboard + Touch Joystick) ---
+  const keys = {};
+  window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+  window.addEventListener("keyup",   e => keys[e.key.toLowerCase()] = false);
+
+  let rotDir = 0;
+  const rotL = document.getElementById("rot-l");
+  const rotR = document.getElementById("rot-r");
+  rotL.addEventListener("pointerdown", () => rotDir = -1);
+  rotL.addEventListener("pointerup",   () => rotDir = 0);
+  rotR.addEventListener("pointerdown", () => rotDir = 1);
+  rotR.addEventListener("pointerup",   () => rotDir = 0);
+
+  const joyZone = document.getElementById("joy-zone");
+  const joyKnob = document.getElementById("joy-knob");
+  let joyX = 0, joyY = 0, joyActive = false;
+
+  joyZone.addEventListener("pointerdown", e => { joyActive = true; updateJoy(e); });
+  window.addEventListener("pointermove", e => { if (joyActive) updateJoy(e); });
+  window.addEventListener("pointerup", () => {
+    joyActive = false; joyX = 0; joyY = 0;
+    joyKnob.style.transform = "translate(0px, 0px)";
+  });
+
+  function updateJoy(e) {
+    const r = joyZone.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    let dx = e.clientX - cx, dy = e.clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 38) { dx = (dx / dist) * 38; dy = (dy / dist) * 38; }
+    joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+    joyX = dx / 38;
+    joyY = -dy / 38;
+  }
+
+  // --- GENERATE 3D CHALKBOARD MATH SUM ---
+  const sumBar = document.getElementById("sum-bar");
+  const ansBtns = document.getElementById("ans-buttons");
+
+  function triggerMathSum(studentName) {
+    motto.sumsTaken++;
+    const sumsEl = document.getElementById("ui-sums");
+    sumsEl.textContent = motto.sumsTaken;
+    if (motto.sumsTaken > 4) sumsEl.classList.add("danger-text");
+
+    // Check immediate failure if > 5 sums taken
+    if (motto.sumsTaken > 5) {
+      endSchoolDay(false, "FAILED! You accepted " + motto.sumsTaken + " sums (more than 5)! You acted like a hardworking teacher instead of slacking off!");
+      return;
+    }
+
+    const a = Math.floor(Math.random() * 15) + 5;
+    const b = Math.floor(Math.random() * 12) + 3;
+    const ans = a + b;
+    motto.activeBoardText = `SUM #${motto.sumsTaken}: ${a} + ${b} = ?`;
+
+    document.getElementById("sum-student").textContent = `${studentName}: "Sir! Teach me ${a} + ${b} on the 3D Board!"`;
+    ansBtns.innerHTML = "";
+
+    [ans, ans + 2, ans - 3].sort(() => Math.random() - 0.5).forEach(choice => {
+      const btn = document.createElement("button");
+      btn.className = "ans-btn";
+      btn.textContent = choice;
+      btn.onclick = () => {
+        motto.activeBoardText = `SOLVED: ${a} + ${b} = ${ans}`;
+        sumBar.style.display = "none";
+      };
+      ansBtns.appendChild(btn);
+    });
+
+    const skip = document.createElement("button");
+    skip.className = "skip-btn";
+    skip.textContent = "Ignore & Run";
+    skip.onclick = () => {
+      motto.activeBoardText = "TEACHER REFUSED SUM!";
+      sumBar.style.display = "none";
+    };
+    ansBtns.appendChild(skip);
+    sumBar.style.display = "block";
+  }
+
+  // --- SCHOOL DAY TIMER ---
+  const timerInterval = setInterval(() => {
+    if (motto.gameOver) return;
+    motto.timeLeft--;
+    document.getElementById("ui-time").textContent = motto.timeLeft;
+    if (motto.timeLeft <= 0) {
+      if (motto.sumsTaken === 0) {
+        endSchoolDay(false, "FAILED! You took 0 sums! The Headmaster caught you doing zero work. You must accept at least 1 sum!");
+      } else if (motto.sumsTaken <= 5) {
+        endSchoolDay(true, "VICTORY! You survived the school day taking only " + motto.sumsTaken + " sum(s) (1 to 5 allowed). Master of minimal effort!");
+      } else {
+        endSchoolDay(false, "FAILED! You took more than 5 sums!");
+      }
+    }
+  }, 1000);
+
+  function endSchoolDay(won, message) {
+    motto.gameOver = true;
+    clearInterval(timerInterval);
+    sumBar.style.display = "none";
+    const modal = document.getElementById("end-modal");
+    document.getElementById("end-title").textContent = won ? "SCHOOL DAY PASSED!" : "TEACHER FAILED!";
+    document.getElementById("end-title").style.color = won ? "#10b981" : "#ef4444";
+    document.getElementById("end-msg").textContent = message;
+    modal.style.display = "flex";
+    if (window.Fridge) window.Fridge.saveData("last_sums", motto.sumsTaken);
+  }
+
+  // --- 3D CAMERA PROJECTION ---
+  // Third-person camera sits behind and above MOTTO
+  const FOV = 420;
+  function project3D(wx, wy, wz, camX, camY, camZ, camYaw) {
+    const dx = wx - camX;
+    const dy = wy - camY;
+    const dz = wz - camZ;
+
+    const cosY = Math.cos(-camYaw), sinY = Math.sin(-camYaw);
+    const rx = dx * cosY - dz * sinY;
+    const rz = dx * sinY + dz * cosY;
+
+    if (rz <= 8) return null; // Behind camera near-plane
+    const scale = FOV / rz;
+    return {
+      x: cv.width / 2 + rx * scale,
+      y: cv.height * 0.54 - dy * scale,
+      scale: scale,
+      depth: rz
+    };
+  }
+
+  // --- UPDATE PHYSICS & AI ---
+  function update() {
+    if (motto.gameOver) return;
+
+    if (keys["a"] || keys["arrowleft"])  motto.angle -= 0.045;
+    if (keys["d"] || keys["arrowright"]) motto.angle += 0.045;
+    motto.angle += rotDir * 0.045 + joyX * 0.04;
+
+    let moveFwd = joyY;
+    if (keys["w"] || keys["arrowup"])   moveFwd = 1;
+    if (keys["s"] || keys["arrowdown"]) moveFwd = -0.8;
+
+    const spd = 2.6 * moveFwd;
+    motto.x += Math.sin(motto.angle) * spd;
+    motto.z += Math.cos(motto.angle) * spd;
+
+    // Lock player inside school perimeter
+    motto.x = Math.max(-BOUND, Math.min(BOUND, motto.x));
+    motto.z = Math.max(-BOUND, Math.min(BOUND, motto.z));
+
+    // Update AI Students & Staff
+    npcs.forEach(n => {
+      if (n.cooldown > 0) n.cooldown--;
+      const dx = motto.x - n.x;
+      const dz = motto.z - n.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (n.role === "student") {
+        // Students chase MOTTO to ask math sums!
+        if (dist < 170 && n.cooldown === 0) {
+          n.x += (dx / dist) * 1.35;
+          n.z += (dz / dist) * 1.35;
+        } else {
+          // Patrol classroom
+          n.x += Math.sin(Date.now() * 0.001 + n.x) * 0.4;
+        }
+        // Student catches MOTTO
+        if (dist < 22 && n.cooldown === 0) {
+          n.cooldown = 220; // 3.5s immunity from this student
+          triggerMathSum(n.name);
+        }
+      } else {
+        // HM and Staff pace inside their rooms
+        n.x += Math.sin(Date.now() * 0.0015) * 0.35;
+      }
+    });
+  }
+
+  // --- RENDER 3D SCENE ---
+  function render() {
+    // Sky / Ceiling & School Floor
+    ctx.fillStyle = "#090d1a";
+    ctx.fillRect(0, 0, cv.width, cv.height * 0.54);
+    ctx.fillStyle = "#111827";
+    ctx.fillRect(0, cv.height * 0.54, cv.width, cv.height * 0.46);
+
+    // Third-person camera positioned 55 units behind MOTTO
+    const camX = motto.x - Math.sin(motto.angle) * 58;
+    const camZ = motto.z - Math.cos(motto.angle) * 58;
+    const camY = 26;
+
+    // 1. Draw Floor Grid for 3D Depth Perception
+    ctx.strokeStyle = "rgba(0, 229, 255, 0.12)";
+    ctx.lineWidth = 1;
+    for (let gx = -240; gx <= 240; gx += 60) {
+      for (let gz = -240; gz < 240; gz += 60) {
+        const p1 = project3D(gx, 0, gz, camX, camY, camZ, motto.angle);
+        const p2 = project3D(gx + 60, 0, gz, camX, camY, camZ, motto.angle);
+        const p3 = project3D(gx, 0, gz + 60, camX, camY, camZ, motto.angle);
+        if (p1 && p2) { ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke(); }
+        if (p1 && p3) { ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p3.x, p3.y); ctx.stroke(); }
+      }
+    }
+
+    // 2. Draw 3D Walls & Classroom Chalkboards
+    walls.forEach(w => {
+      const b1 = project3D(w.x1, 0,   w.z1, camX, camY, camZ, motto.angle);
+      const b2 = project3D(w.x2, 0,   w.z2, camX, camY, camZ, motto.angle);
+      const t2 = project3D(w.x2, w.h, w.z2, camX, camY, camZ, motto.angle);
+      const t1 = project3D(w.x1, w.h, w.z1, camX, camY, camZ, motto.angle);
+      if (b1 && b2 && t1 && t2) {
+        ctx.fillStyle = w.col;
+        ctx.strokeStyle = w.isBoard ? "#eab308" : "#334155";
+        ctx.lineWidth = w.isBoard ? 3 : 1;
+        ctx.beginPath();
+        ctx.moveTo(b1.x, b1.y); ctx.lineTo(b2.x, b2.y);
+        ctx.lineTo(t2.x, t2.y); ctx.lineTo(t1.x, t1.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Draw Live Math Sum on the 3D Classroom Chalkboard!
+        const cx = (b1.x + b2.x + t1.x + t2.x) / 4;
+        const cy = (b1.y + b2.y + t1.y + t2.y) / 4;
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold " + Math.max(10, Math.min(22, Math.round(b1.scale * 5))) + "px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(w.isBoard ? motto.activeBoardText : (w.label || ""), cx, cy);
+      }
+    });
+
+    // 3. Collect & Depth-Sort 3D Entities (Desks, NPCs, and Third-Person MOTTO)
+    const renderList = [];
+
+    desks.forEach(d => {
+      const p = project3D(d.x, 0, d.z, camX, camY, camZ, motto.angle);
+      if (p) renderList.push({ type: "desk", p, depth: p.depth });
+    });
+
+    npcs.forEach(n => {
+      const p = project3D(n.x, 0, n.z, camX, camY, camZ, motto.angle);
+      if (p) renderList.push({ type: "npc", npc: n, p, depth: p.depth });
+    });
+
+    const mp = project3D(motto.x, 0, motto.z, camX, camY, camZ, motto.angle);
+    if (mp) renderList.push({ type: "motto", p: mp, depth: mp.depth });
+
+    renderList.sort((a, b) => b.depth - a.depth);
+
+    // 4. Draw Depth-Sorted 3D Models
+    renderList.forEach(item => {
+      const p = item.p;
+      const s = p.scale;
+
+      if (item.type === "desk") {
+        const w = 22 * s, h = 10 * s;
+        ctx.fillStyle = "#78350f";
+        ctx.strokeStyle = "#b45309";
+        ctx.fillRect(p.x - w / 2, p.y - h, w, h);
+        ctx.strokeRect(p.x - w / 2, p.y - h, w, h);
+      } else if (item.type === "npc") {
+        const n = item.npc;
+        const bw = 12 * s, bh = 22 * s;
+        // Shadow
+        ctx.fillStyle = "rgba(0,0,0,0.4)";
+        ctx.fillRect(p.x - bw / 2, p.y - 2 * s, bw, 4 * s);
+        // 3D Torso
+        ctx.fillStyle = n.col;
+        ctx.fillRect(p.x - bw / 2, p.y - bh, bw, bh);
+        // 3D Head
+        ctx.fillStyle = "#fde047";
+        ctx.fillRect(p.x - bw * 0.38, p.y - bh - bw * 0.75, bw * 0.76, bw * 0.75);
+        // Nameplate
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold " + Math.max(9, Math.min(14, Math.round(3.5 * s))) + "px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(n.name, p.x, p.y - bh - bw);
+      } else if (item.type === "motto") {
+        // Third-Person Main Character: MOTTO (Maths Teacher)
+        const bw = 14 * s, bh = 25 * s;
+        const bob = Math.sin(Date.now() * 0.012) * 1.5 * s;
+        // Shadow
+        ctx.fillStyle = "rgba(0,229,255,0.3)";
+        ctx.fillRect(p.x - bw * 0.6, p.y - 2 * s, bw * 1.2, 4 * s);
+        // Teacher Suit Body
+        ctx.fillStyle = "#00e5ff";
+        ctx.fillRect(p.x - bw / 2, p.y - bh + bob, bw, bh);
+        // Teacher Head
+        ctx.fillStyle = "#f8fafc";
+        ctx.fillRect(p.x - bw * 0.4, p.y - bh - bw * 0.7 + bob, bw * 0.8, bw * 0.7);
+        // Character Label
+        ctx.fillStyle = "#00e5ff";
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("MOTTO (Maths Teacher)", p.x, p.y - bh - bw * 0.9 + bob);
+      }
+    });
+  }
+
+  function loop() {
+    update();
+    render();
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>
