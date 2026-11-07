@@ -1,0 +1,8 @@
+{
+  "id": "motto3d",
+  "name": "MOTTO 3D School",
+  "version": "1.0.0",
+  "type": "game",
+  "wrapper": "app.frg",
+  "entry": "index.html"
+}
