@@ -1,4 +1,4 @@
-  name: Build MOTTO 3D .uZip Package
+name: Build MOTTO 3D .uZip Package
 
 on:
   push:
